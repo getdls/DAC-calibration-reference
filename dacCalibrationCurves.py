@@ -1,13 +1,18 @@
 import numpy as np
 import matplotlib.pyplot as plt
+from scipy.interpolate import interp1d
 
-# Reference IRE levels
-ire_levels = np.array([0, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100])
+# Reference levels 
+ire_levels = np.linspace(0, 100, 11)
+reference_mv_values = np.linspace(0, 700, 11)
+reference_curve = (reference_mv_values / 700) * 255  # (8-bit values)
 
-# Equivalent mV values for the IRE levels
-reference_mv_values = np.array([0, 70, 140, 210, 280, 350, 420, 490, 560, 630, 700])
+# HDMI limited 2 coefficients from mister.ini 
+hdmi_limited_2_coeffs = np.array([0.93701171875, 0.06250])
+hdmi_limited_2_coeffs_mv = hdmi_limited_2_coeffs[0] * reference_mv_values + hdmi_limited_2_coeffs[1] * 700
+hdmi_2_curve = (hdmi_limited_2_coeffs_mv / 700) * 255  # 
 
-# DAC measurements (mV)
+# DAC measurements for correction curve
 dac_measurements = np.array([
     [0, 24, 98, 170, 248, 344, 414, 486, 562, 632, 700],
     [0, 24, 100, 172, 246, 344, 416, 490, 564, 636, 706],
@@ -25,76 +30,65 @@ dac_measurements = np.array([
     [0, 74, 144, 216, 286, 384, 450, 522, 594, 660, 726],
     [0, 72, 144, 216, 286, 380, 446, 518, 586, 656, 720]
 ])
+correction_curve = (reference_mv_values * 2) - np.median(dac_measurements, axis=0)
+original_correction_curve = (correction_curve / 700) * 255  
 
-# Calculate median and standard deviation
-median = np.median(dac_measurements, axis=0)
-std_dev = np.std(dac_measurements, axis=0)
+# Calculate updated correction curve
+updated_correction_curve = (original_correction_curve - hdmi_2_curve) + reference_curve
+updated_correction_curve = np.clip(updated_correction_curve, 0, 255)  
+full_range = np.arange(256)
+linear_interpolated_curve = interp1d(np.linspace(0, 255, len(updated_correction_curve)), updated_correction_curve, kind='linear', fill_value="extrapolate")(full_range)
+cubic_interpolated_curve = interp1d(np.linspace(0, 255, len(updated_correction_curve)), updated_correction_curve, kind='cubic', fill_value="extrapolate")(full_range)
 
-# Identify outliers (e.g., values that are more than 0.25 standard deviations from the median)
-threshold = 0.25
-outliers = np.abs(dac_measurements - median) > threshold * std_dev
+# Apply tweaks
+# Uncomment the following lines to apply specific tweaks
+# tweak_values = [0, -10, 0, 0, 0, 5, 0]  # Shadow increase tweak
+# tweak_values = [5, 10, 15, 20, 25, 30, 35]  # Brightness increase tweak
+# tweak_values = [-20, -15, -10, -5, 0, 5, 10]  # Shift Black and White Points
+# tweak_values = [-20, -15, -10, -5, 0, 0, 0]  # Shift Black Point
+# tweak_values = [2, 4, 6, 8, 6, 4, 2]  # Mild Gamma Boost
+# tweak_values = [5, 10, 15, 20, 15, 10, 5]  # Moderate Gamma Boost
+tweak_values = [+1, -4, -6, -10, -6, -4, +1]  # Mild Gamma Reduction
+# tweak_values = [-5, -10, -15, -20, -15, -10, -5]  # Moderate Gamma Reduction
+# tweak_values = [0, -10, 0, 0, 0, 10, 0]  # Sigmoid Gamma Curve
+# tweak_values = [0, 0, 0, 0, 0, 0, 0]  # Default tweak values (no change)
 
-# Filter out the outliers
-filtered_measurements = np.where(outliers, np.nan, dac_measurements)
+# Interpolate the tweak values to match the full range
+tweak_curve = interp1d(np.linspace(0, 255, len(tweak_values)), tweak_values, kind='cubic', fill_value="extrapolate")(full_range)
+tweaked_curve = np.clip(cubic_interpolated_curve + tweak_curve, 0, 255)
 
-# Truncate and round the filtered data for simpler viewing, removing nan values
-truncated_filtered_measurements = [
-    [int(val) if not np.isnan(val) else None for val in row]
-    for row in filtered_measurements.T
-]
+def save_curve(filename, description, curve):
+    with open(filename, "w") as f:
+        f.write(f"# {description}\n")
+        for value in curve:
+            print(value)
+            f.write(f"{value}\n")
 
-# Calculate the correction curve
-correction_curve = median + (reference_mv_values - median) * 2
+save_curve("linear_interp.txt", "HDMI2 Correction curve with linear interpolation", np.round(linear_interpolated_curve).astype(np.int32))
+save_curve("cubic_interp.txt", "HDMI2 Correction curve with cubic interpolation", np.round(cubic_interpolated_curve).astype(np.int32))
+save_curve("tweaked_curve.txt", "HDMI2 Correction curve with tweaked gamma", np.round(tweaked_curve).astype(np.int32))
 
-# Define hdmi_limited_2_coeffs as a numpy array
-hdmi_limited_2_coeffs = np.array([
-    [0.93701171875, 0.0, 0.0, 0.06250],
-    [0.0, 0.93701171875, 0.0, 0.06250],
-    [0.0, 0.0, 0.93701171875, 0.06250],
-    [0.0, 0.0, 0.0, 1.0]
-])
-
-# Define hdmi_limited_2 curve equivalent mV values
-hdmi_limited_2_coeffs_mv = hdmi_limited_2_coeffs[0, 0] * reference_mv_values + hdmi_limited_2_coeffs[0, 3] * 700
-
-# Calculate the error curve as the difference between the reference line and the correction curve
-error_curve = correction_curve - reference_mv_values
-error_curve_HDMI2 = correction_curve - hdmi_limited_2_coeffs_mv
-HDMI2offset_correction_curve = reference_mv_values - error_curve_HDMI2
-
-# Plotting the original plot with error curve
 plt.figure(figsize=(14, 8))
 
 plt.subplot(1, 2, 1)
-plt.plot(ire_levels, reference_mv_values, label='Reference IRE Levels', color='green', linewidth=2)
-plt.plot(ire_levels, median, label='Median DAC Measurements', color='blue', linewidth=2)
-plt.plot(ire_levels, correction_curve, label='Correction Curve', color='red', linestyle='--', linewidth=2)
-plt.fill_between(ire_levels, correction_curve - std_dev, correction_curve + std_dev, color='red', alpha=0.3, label='Standard Deviation around Correction Curve')
-plt.plot(ire_levels, hdmi_limited_2_coeffs_mv, label='HDMI Limited 2 Coeffs', color='purple', linestyle='-.', linewidth=2)
-plt.plot(ire_levels, error_curve, label='Error Curve (Reference - Correction)', color='orange', linestyle=':', linewidth=2)
-
-plt.xlabel('IRE Level')
-plt.ylabel('mV Value')
-plt.title('Original Plot with Error Curve')
+plt.plot(np.linspace(0, 255, len(reference_curve)), reference_curve, label='Reference Curve (8-bit)', color='green', linestyle='-', linewidth=2)
+plt.plot(np.linspace(0, 255, len(hdmi_2_curve)), hdmi_2_curve, label='HDMI_2 Curve (8-bit)', color='purple', linestyle='-.', linewidth=2)
+plt.plot(np.linspace(0, 255, len(original_correction_curve)), original_correction_curve, label='Original Correction Curve (8-bit)', color='blue', linestyle='--', linewidth=2)
+plt.xlabel('IRE Level (0-255)')
+plt.ylabel('8-bit Value')
+plt.title('Curves (0-255 Range)')
 plt.legend(loc='upper left')
 plt.grid(True)
 
-# Plotting the secondary plot
 plt.subplot(1, 2, 2)
-plt.plot(ire_levels, hdmi_limited_2_coeffs_mv, label='HDMI Limited 2 Coeffs', color='purple', linestyle='-.', linewidth=2)
-plt.plot(ire_levels, correction_curve, label='Original Correction Curve', color='red', linestyle='--', linewidth=2)
-plt.plot(ire_levels, error_curve_HDMI2, label='Error Curve (Correction - HDMI2)', color='orange', linestyle=':', linewidth=2)
-plt.plot(ire_levels, HDMI2offset_correction_curve, label='HDMI2 correction (HDMI2 - Correction)', color='blue', linestyle=':', linewidth=2)
-
-plt.xlabel('IRE Level')
-plt.ylabel('mV Value')
-plt.title('Secondary Plot: HDMI Limited 2 Active')
+plt.plot(full_range, linear_interpolated_curve, label='Linear Interpolation', color='red', linestyle='-', linewidth=2)
+plt.plot(full_range, cubic_interpolated_curve, label='Cubic Interpolation', color='blue', linestyle='-', linewidth=2)
+plt.plot(full_range, tweaked_curve, label='Tweaked Curve', color='orange', linestyle='-', linewidth=2)
+plt.xlabel('IRE Level (0-255)')
+plt.ylabel('8-bit Value')
+plt.title('Updated Correction Curves (Interpolated)')
 plt.legend(loc='upper left')
 plt.grid(True)
 
 plt.tight_layout()
 plt.show()
-
-# Convert HDMI2offset_correction_curve to 8-bit gamma range and print the values
-HDMI2_Gamma_correction_curve = np.interp(HDMI2offset_correction_curve, (HDMI2offset_correction_curve.min(), HDMI2offset_correction_curve.max()), (0, 255))
-print("HDMI-Gamma-correction_curve = np.array([{}])".format(', '.join(map(str, HDMI2_Gamma_correction_curve.astype(np.int32)))))

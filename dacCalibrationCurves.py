@@ -2,15 +2,15 @@ import numpy as np
 import matplotlib.pyplot as plt
 from scipy.interpolate import interp1d
 
-# Reference levels 
-ire_levels = np.linspace(0, 100, 11)
-reference_mv_values = np.linspace(0, 700, 11)
-reference_curve = (reference_mv_values / 700) * 255  # (8-bit values)
+# Reference levels
+ire_levels = np.linspace(0, 100, 11) 
+reference_mv_values = np.linspace(0, 700, 11)  
+reference_curve = (reference_mv_values / 700) * 255  # 8-bit
 
-# HDMI limited 2 coefficients from mister.ini 
+# HDMI limited 2 coefficients
 hdmi_limited_2_coeffs = np.array([0.93701171875, 0.06250])
 hdmi_limited_2_coeffs_mv = hdmi_limited_2_coeffs[0] * reference_mv_values + hdmi_limited_2_coeffs[1] * 700
-hdmi_2_curve = (hdmi_limited_2_coeffs_mv / 700) * 255  # 
+hdmi_2_curve = (hdmi_limited_2_coeffs_mv / 700) * 255 
 
 # DAC measurements for correction curve
 dac_measurements = np.array([
@@ -33,29 +33,18 @@ dac_measurements = np.array([
 correction_curve = (reference_mv_values * 2) - np.median(dac_measurements, axis=0)
 original_correction_curve = (correction_curve / 700) * 255  
 
-# Calculate updated correction curve
-updated_correction_curve = (original_correction_curve - hdmi_2_curve) + reference_curve
-updated_correction_curve = np.clip(updated_correction_curve, 0, 255)  
+# Calculate updated correction curve directly
+updated_correction_curve = np.clip((original_correction_curve - hdmi_2_curve) + reference_curve, 0, 255)
 full_range = np.arange(256)
-linear_interpolated_curve = interp1d(np.linspace(0, 255, len(updated_correction_curve)), updated_correction_curve, kind='linear', fill_value="extrapolate")(full_range)
 cubic_interpolated_curve = interp1d(np.linspace(0, 255, len(updated_correction_curve)), updated_correction_curve, kind='cubic', fill_value="extrapolate")(full_range)
 
 # Apply tweaks
-# Uncomment the following lines to apply specific tweaks
-# tweak_values = [0, -10, 0, 0, 0, 5, 0]  # Shadow increase tweak
-# tweak_values = [5, 10, 15, 20, 25, 30, 35]  # Brightness increase tweak
-# tweak_values = [-20, -15, -10, -5, 0, 5, 10]  # Shift Black and White Points
-# tweak_values = [-20, -15, -10, -5, 0, 0, 0]  # Shift Black Point
-# tweak_values = [2, 4, 6, 8, 6, 4, 2]  # Mild Gamma Boost
-# tweak_values = [5, 10, 15, 20, 15, 10, 5]  # Moderate Gamma Boost
-tweak_values = [+1, -4, -6, -10, -6, -4, +1]  # Mild Gamma Reduction
-# tweak_values = [-5, -10, -15, -20, -15, -10, -5]  # Moderate Gamma Reduction
-# tweak_values = [0, -10, 0, 0, 0, 10, 0]  # Sigmoid Gamma Curve
-# tweak_values = [0, 0, 0, 0, 0, 0, 0]  # Default tweak values (no change)
+def apply_tweaks(curve, tweaks):
+    tweak_curve = interp1d(np.linspace(0, 255, len(tweaks)), tweaks, kind='cubic', fill_value="extrapolate")(full_range)
+    return np.clip(curve + tweak_curve, 0, 255)
 
-# Interpolate the tweak values to match the full range
-tweak_curve = interp1d(np.linspace(0, 255, len(tweak_values)), tweak_values, kind='cubic', fill_value="extrapolate")(full_range)
-tweaked_curve = np.clip(cubic_interpolated_curve + tweak_curve, 0, 255)
+tweak_values = [+1, -4, -6, -10, -6, -4, +1]  # Mild Gamma Reduction
+tweaked_curve = apply_tweaks(cubic_interpolated_curve, tweak_values)
 
 def save_curve(filename, description, curve):
     with open(filename, "w") as f:
@@ -64,7 +53,6 @@ def save_curve(filename, description, curve):
             print(value)
             f.write(f"{value}\n")
 
-save_curve("linear_interp.txt", "HDMI2 Correction curve with linear interpolation", np.round(linear_interpolated_curve).astype(np.int32))
 save_curve("cubic_interp.txt", "HDMI2 Correction curve with cubic interpolation", np.round(cubic_interpolated_curve).astype(np.int32))
 save_curve("tweaked_curve.txt", "HDMI2 Correction curve with tweaked gamma", np.round(tweaked_curve).astype(np.int32))
 
@@ -81,7 +69,6 @@ plt.legend(loc='upper left')
 plt.grid(True)
 
 plt.subplot(1, 2, 2)
-plt.plot(full_range, linear_interpolated_curve, label='Linear Interpolation', color='red', linestyle='-', linewidth=2)
 plt.plot(full_range, cubic_interpolated_curve, label='Cubic Interpolation', color='blue', linestyle='-', linewidth=2)
 plt.plot(full_range, tweaked_curve, label='Tweaked Curve', color='orange', linestyle='-', linewidth=2)
 plt.xlabel('IRE Level (0-255)')
